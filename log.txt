@@ -1,0 +1,27 @@
+[2025-03-23 11:23:07]Directory testDi created successfully
+[2025-03-23 11:28:47]Directory testDir created successfully
+[2025-03-23 11:31:34]File ./testDir/example1.txt created successfully
+[2025-03-23 11:32:02]File ./testDir/example2.txt created successfully
+[2025-03-23 11:33:57]Directory testDir listed successfully
+
+
+[2025-03-23 11:34:02]Directory testDir listed successfully
+
+
+[2025-03-23 11:35:24]Files with extension .txt listed successfully
+
+
+[2025-03-23 11:37:47]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 12:48:26]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 12:49:30]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 12:49:54]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 12:50:52]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 12:51:04]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 13:50:22]Directory testDir listed successfully
+[2025-03-23 13:50:42]File ./testDir/example1.txt read successfully
+[2025-03-23 13:51:06]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 13:52:12]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 13:53:47]Content appended to file ./testDir/example1.txt successfully
+[2025-03-23 15:30:06]File ./testDir/example1.txt deleted successfully
+[2025-03-23 15:42:45]File ./testDir/example2.txt deleted successfully
+[2025-03-23 15:42:56]Directory testDir deleted successfully
