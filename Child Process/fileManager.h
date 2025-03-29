@@ -18,7 +18,7 @@ int isFileLocked(const char *fileName);
 char *getTimestamp();
 void logOperation(char *msg);
 void createDir(char *dirName);
-void creteFile(char *fileName);
+void createFile(char *fileName);
 void listDir(char *dirName);
 void listFileByExtension(char *dirName, char *extension);
 void readFile(char *fileName);

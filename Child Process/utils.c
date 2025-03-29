@@ -32,7 +32,7 @@ void my_perror(const char *msg)
     write(2, errorMsg, len); // File descriptor 2 = stderr
 }
 
-
+/* Function to check if file is locked */
 int isFileLocked(const char *fileName)
 {
     int fd = open(fileName, O_RDONLY);
@@ -59,6 +59,7 @@ int isFileLocked(const char *fileName)
     return (lock.l_type == F_UNLCK) ? 0 : 1; // 0 = not locked, 1 = locked
 }
 
+/* Function to get timestamp */
 char *getTimestamp() {
     static char buffer[30];
     time_t now = time(NULL);
@@ -69,6 +70,7 @@ char *getTimestamp() {
     return buffer;
 }
 
+/* Function to print log operation */
 void logOperation(char *message)
 {
     int fd = open("log.txt", O_WRONLY | O_APPEND | O_CREAT, 0700);
@@ -84,11 +86,12 @@ void logOperation(char *message)
     close(fd);
 }
 
-
+/* Function to create a directory */
 void createDir(char *dirName)
 {
     struct stat st = {0};
 
+    //check if directory exists
     if (stat(dirName, &st) == -1)
     {
         if (mkdir(dirName, 0700) == 0)
@@ -117,11 +120,12 @@ void createDir(char *dirName)
     }
 }
 
-
-void creteFile(char *fileName)
+/* Function to create a file */
+void createFile(char *fileName)
 {
     struct stat st = {0};
 
+    //check if file exists
     if (stat(fileName, &st) == -1)
     {
         int fd = open(fileName, O_CREAT | O_WRONLY, 0700);
@@ -155,6 +159,7 @@ void creteFile(char *fileName)
     }
 }
 
+/* Function to list directory contents */
 void listDir (char *dirName)
 {
     struct dirent *de;
@@ -191,6 +196,7 @@ void listDir (char *dirName)
     closedir(dr);
 }
 
+/* Function to list files by extension */
 void listFileByExtension(char *dirName, char *extension)
 {
     struct dirent *de;
@@ -213,8 +219,11 @@ void listFileByExtension(char *dirName, char *extension)
         write(1, "Could not open directory\n", 25);
         return;
     }
+
+    // List files with the given extension
     while ((de = readdir(dr)) != NULL)
     {
+        // Check if the file has the given extension
         if (strstr(de->d_name, extension) != NULL)
         {
             write(1, de->d_name, strlen(de->d_name));
@@ -246,6 +255,7 @@ void listFileByExtension(char *dirName, char *extension)
     closedir(dr);
 }
 
+/* Function to read file contents */
 void readFile(char *fileName)
 {
     struct stat st = {0};
@@ -266,6 +276,7 @@ void readFile(char *fileName)
         return;
     }
 
+    // Read file contents
     char buffer[100];
     int bytesRead = read(fd, buffer, 100);
     if (bytesRead == -1)
@@ -286,6 +297,7 @@ void readFile(char *fileName)
     close(fd);
 }
 
+/* Function to delete a file */
 void deleteFile(char *fileName)
 {
     struct stat st = {0};
@@ -300,6 +312,7 @@ void deleteFile(char *fileName)
         return;
     }
 
+    // deleting with unlink
     if (unlink(fileName) == 0)
     {
         char msg[100];
@@ -323,6 +336,7 @@ void deleteFile(char *fileName)
     }
 }
 
+/* Function to check if directory is empty */
 int isDirEmpty(char *dirName)
 {
     DIR *dr = opendir(dirName);
@@ -335,6 +349,7 @@ int isDirEmpty(char *dirName)
     struct dirent *de;
     while ((de = readdir(dr)) != NULL)
     {
+        // Checking contents except "." and ".." root directories
         if (strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0)
         {
             closedir(dr);
@@ -345,6 +360,7 @@ int isDirEmpty(char *dirName)
     return 1;
 }
 
+/* Function to delete a directory */
 void deleteDir(char *dirName)
 {
     struct stat st = {0};
@@ -393,6 +409,7 @@ void deleteDir(char *dirName)
     }
 }
 
+/* Function to append content to a file */
 void appendToFile(char *fileName, char *content)
 {
     struct stat st = {0};
@@ -407,6 +424,7 @@ void appendToFile(char *fileName, char *content)
         return;
     }
 
+    // Check if file is regular and not locked
     if (!(st.st_mode & S_IFREG) || isFileLocked(fileName))
     {
         char msg[100];
@@ -434,6 +452,7 @@ void appendToFile(char *fileName, char *content)
 
     write(fd, "\n", 1);
     write(fd, content, strlen(content));
+    write(1, "Content appended successfully\n\n", 30);
 
     if (flock(fd, LOCK_UN) == -1)
     {
@@ -451,6 +470,7 @@ void appendToFile(char *fileName, char *content)
     close(fd);
 }
 
+/* Function to print logs */
 void showLogs()
 {
     int fd = open("log.txt", O_RDONLY);

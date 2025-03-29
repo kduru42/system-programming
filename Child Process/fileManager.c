@@ -3,13 +3,8 @@
 int main(int argc, char *argv[])
 {
 
-    if (argc < 2)
-    {
-        write(1, "Usage: fileManager <command> [arguments] \n", 43);
-        return 1;
-    }
 
-    if (strcmp(argv[1], "fileManager") == 0)
+    if (argc == 1)
     {
         write(1, "Usage: fileManager <command> [arguments] \n\n", 44);
         write(1, "Commands:\n", 11);
@@ -32,7 +27,7 @@ int main(int argc, char *argv[])
     }
     else if (strcmp(argv[1], "createFile") == 0)
     {
-        creteFile(argv[2]);
+        createFile(argv[2]);
     }
     else if (strcmp(argv[1], "listDir") == 0)
     {
