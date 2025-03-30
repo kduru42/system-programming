@@ -13,6 +13,7 @@
 #include <sys/time.h>
 
 #define CONFIG_FILE "/etc/daemon_config.conf"
+volatile sig_atomic_t running = 1; // Flag to indicate if the daemon is running
 
 char LOG_FILE[100] = "/var/log/daemon_log.txt";
 int timeout = 20;
@@ -65,8 +66,8 @@ void sigchld_handler(int signo)
 void handle_signal(int signo) {
     if (signo == SIGTERM) {
         syslog(LOG_INFO, "Daemon received SIGTERM. Exiting gracefully.");
-        closelog();
-        exit(0);
+        running = 0;  // Set the running flag to 0 to exit the loop in main
+        closelog();  // Close the syslog connection
     } else if (signo == SIGHUP) {
         syslog(LOG_INFO, "Daemon received SIGHUP. Reloading configuration.");
         reload_config();
@@ -78,20 +79,28 @@ void monitor_children() {
     pid_t child_pid;
     time_t start_time = time(NULL);
 
-    while(child_counter > 0)
-    {
+    while (child_counter > 0) {
         child_pid = waitpid(-1, &status, WNOHANG);
-        if (child_pid > 0)
-        {
+
+        if (child_pid > 0) {  // A child process terminated
             syslog(LOG_INFO, "Child process %d terminated", child_pid);
             child_counter--;
+        } else if (child_pid == 0) {  // No child has exited yet
+            sleep(1);  // Avoid busy-waiting
+        } else {  // No child left (-1 returned)
+            break;
         }
 
-        if (time(NULL) - start_time > timeout)
-        {
-            syslog(LOG_INFO, "Timeout reached. Terminating inactive child processes.");
-            kill(child_pid, SIGTERM);
-            child_counter--;
+        // Check timeout
+        if (time(NULL) - start_time > timeout) {
+            syslog(LOG_WARNING, "Timeout reached. Checking for inactive child processes.");
+            
+            // Kill remaining children
+            while ((child_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                syslog(LOG_WARNING, "Killing child process %d due to timeout", child_pid);
+                kill(child_pid, SIGTERM);
+                child_counter--;
+            }
             break;
         }
     }
@@ -101,23 +110,30 @@ void create_deamon()
 {
     pid_t pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS);
+    if (pid > 0) exit(EXIT_SUCCESS);  // Parent exits
 
-    setsid();  // Create a new session
+    if (setsid() < 0) exit(EXIT_FAILURE);  // Create a new session
 
-    signal(SIGHUP, SIG_IGN);
+    signal(SIGCHLD, sigchld_handler);
     pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS);
-
+    if (pid > 0) exit(EXIT_SUCCESS);  // Parent exits
+    
     chdir("/");
     umask(0);
-
-    freopen(LOG_FILE, "a", stdout);
-    freopen(LOG_FILE, "a", stderr);
-
+    
+    // Redirect standard output and error to the log file
+    FILE *log_fp = fopen(LOG_FILE, "a");
+    if (log_fp) {
+        dup2(fileno(log_fp), STDOUT_FILENO);
+        dup2(fileno(log_fp), STDERR_FILENO);
+        fclose(log_fp);
+    }
+    
     openlog("DaemonProcess", LOG_PID, LOG_DAEMON);
     syslog(LOG_INFO, "Daemon started, PID: %d", getpid());
+    signal(SIGTERM, handle_signal);  // Handle termination signal
+    signal(SIGHUP, handle_signal);  // Handle hangup signal
 }
 
 
@@ -135,14 +151,14 @@ int main(int argc, char *argv[])
     char buffer2[100];
     int fd;
     int fd2;
-    printf("debug");
+    create_deamon();
+
     // Create a daemon process
     // Create the FIFO (named pipe)
     if (mkfifo(FIFO_NAME, 0666) == -1) {
         syslog(LOG_ERR, "Error creating FIFO: %s", strerror(errno));
         return 1;
     }
-    
     
     if (mkfifo(FIFO_NAME2, 0666) == -1) {
         syslog(LOG_ERR, "Error creating FIFO2: %s", strerror(errno));
@@ -166,7 +182,6 @@ int main(int argc, char *argv[])
     }
     write (fd2, "COMPARE\n", 8);
     close(fd2);
-    create_deamon();
     
     pid_t pid1 = fork();
     if (pid1 == 0) {
@@ -238,7 +253,7 @@ int main(int argc, char *argv[])
         exit(EXIT_SUCCESS);
     }
 
-    while (child_counter < total_children)
+    while ((child_counter < total_children) && running)
     {
         write(1, "Proceeding...\n", 15);
         monitor_children();
