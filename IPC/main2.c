@@ -10,31 +10,38 @@
 #include <time.h>
 #include <syslog.h>
 #include <errno.h>
+#include <sys/select.h>
 
 #define FIFO1 "/tmp/fifo1"
 #define FIFO2 "/tmp/fifo2"
+#define FIFO3 "/tmp/fifo3"
 #define CMD "COMPARE\n"
-#define LOG_FILE "/var/log/daemon_log.log"
+#define LOG_FILE "daemon_log.log"
+#define CONFIG_FILE "/etc/daemon_config.conf"
 #define TIMEOUT 15
+
 
 volatile sig_atomic_t child_count = 0;
 volatile sig_atomic_t total_children = 2;
 volatile sig_atomic_t running = 1;
+volatile sig_atomic_t need_reload = 0;
+int fd_log;
 
-void set_nonblocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) {
-        syslog(LOG_ERR, "Error getting file descriptor flags: %s", strerror(errno));
-        exit(1);
-    }
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        syslog(LOG_ERR, "Error setting file descriptor to non-blocking: %s", strerror(errno));
-        exit(1);
-    }
+int wait_for_data(int fd, int timeout_sec) {
+    struct timeval tv;
+    fd_set readfds;
+    
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+    
+    tv.tv_sec = timeout_sec;
+    tv.tv_usec = 0;
+    
+    return select(fd+1, &readfds, NULL, NULL, &tv);
 }
 
 void timeout_handler(int sig) {
-    syslog(LOG_ERR, "Timeout occurred. Terminating inactive child processes.");
+    write(fd_log, "Timeout occurred, terminating child processes\n", 44);
     // Terminate all child processes
     kill(0, SIGTERM); // Send SIGTERM to all processes in the same process group
     running = 0; // Stop the main loop
@@ -43,15 +50,18 @@ void timeout_handler(int sig) {
 void sigchld_handler(int sig) {
     pid_t pid;
     int status;
+    char msg[100];
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         if (WIFEXITED(status)) {
-            syslog(LOG_INFO, "Child process %d terminated with exit status %d", pid, WEXITSTATUS(status));
+            snprintf(msg, sizeof(msg), "Child process %d terminated with exit status %d\n", pid, WEXITSTATUS(status));
+            write(fd_log, msg, strlen(msg));
         } else if (WIFSIGNALED(status)) {
-            syslog(LOG_INFO, "Child process %d terminated by signal %d", pid, WTERMSIG(status));
+            snprintf(msg, sizeof(msg), "Child process %d terminated by signal %d\n", pid, WTERMSIG(status));
+            write(fd_log, msg, strlen(msg));
         } else {
-            syslog(LOG_INFO, "Child process %d terminated with unknown status", pid);
+            snprintf(msg, sizeof(msg), "Child process %d terminated with unknown status\n", pid);
+            write(fd_log, msg, strlen(msg));
         }
-        printf("Child process %d terminated\n", pid);
         child_count++;
     }
     
@@ -63,18 +73,32 @@ void sigchld_handler(int sig) {
 void signal_handler(int sig) {
     switch(sig) {
         case SIGUSR1:
-            syslog(LOG_INFO, "Received SIGUSR1 signal");
+            write(fd_log, "Received SIGUSR1 signal\n", 25);
             break;
         case SIGHUP:
-            syslog(LOG_INFO, "Received SIGHUP signal");
+            write(fd_log, "Received SIGHUP signal, reloading configuration\n", 49);
             break;
         case SIGTERM:
-            syslog(LOG_INFO, "Received SIGTERM signal, shutting down");
+            write(fd_log, "Received SIGTERM signal, terminating\n", 38);
             running = 0;
             break;
     }
 }
 
+void clean_data() {
+    // Cleanup function to remove FIFOs and close log file
+    unlink(FIFO1);
+    unlink(FIFO2);
+    unlink(FIFO3);
+    if (fd_log > 0) {
+        char msg[100];
+        snprintf(msg, sizeof(msg), "Daemon process %d cleaning up and exiting with exit status %d\n", getpid(), 0);
+        write(fd_log, msg, strlen(msg));
+        close(fd_log);
+    }
+}
+
+/* Creating daemon process with two fork method*/
 void create_daemon() {
     pid_t pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
@@ -89,26 +113,27 @@ void create_daemon() {
     pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
     if (pid > 0) exit(EXIT_SUCCESS);
+    fd_log = open(LOG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd_log < 0) {
+        perror("Error opening log file");
+        exit(EXIT_FAILURE);
+    }
     
     chdir("/");
     umask(0);
+    dup2(fd_log, STDOUT_FILENO);
+    dup2(fd_log, STDERR_FILENO);
+        
     
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
     
-    FILE *log_fp = fopen(LOG_FILE, "a");
-    if (log_fp) {
-        dup2(fileno(log_fp), STDOUT_FILENO);
-        dup2(fileno(log_fp), STDERR_FILENO);
-        fclose(log_fp);
-    }
-    
-    openlog("DaemonProcess", LOG_PID, LOG_DAEMON);
-
     // Log start time and PID
     time_t now = time(NULL);
-    syslog(LOG_INFO, "Daemon started at %s, PID: %d", ctime(&now), getpid());
+    char log_msg[256];
+    snprintf(log_msg, sizeof(log_msg), "Daemon started at %s with PID: %d\n", ctime(&now), getpid());
+    write(fd_log, log_msg, strlen(log_msg));
 }
 
 int main(int argc, char *argv[]) {
@@ -116,13 +141,14 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <Integer> <Integer>\n", argv[0]);
         return 1;
     }
+    // Converting parent process to daemon
     create_daemon();
 
 
     int num1 = atoi(argv[1]);
     int num2 = atoi(argv[2]);
     int result = 0;
-    int fd1, fd2;
+    int fd1, fd2, fd3;
 
     // Create FIFOs
     if (mkfifo(FIFO1, 0666) == -1 && errno != EEXIST) {
@@ -134,153 +160,191 @@ int main(int argc, char *argv[]) {
         unlink(FIFO1);
         return 1;
     }
+    if (mkfifo(FIFO3, 0666) == -1 && errno != EEXIST) {
+        perror("Error creating FIFO3");
+        unlink(FIFO1);
+        unlink(FIFO2);
+        return 1;
+    }
 
     signal(SIGALRM, timeout_handler);
 
     pid_t pid1 = fork();
     if (pid1 == 0) {
         // Child 1 - Reads from FIFO1, compares, writes to FIFO2
-        syslog(LOG_INFO, "Child1 started with PID: %d", getpid());
+        char msg[100];
+        snprintf(msg, sizeof(msg), "Child1 started with PID: %d\n", getpid());
+        write(fd_log, msg, strlen(msg));
         sleep(10);
         
         fd1 = open(FIFO1, O_RDONLY);
         if (fd1 == -1) {
-            syslog(LOG_ERR, "Child1: Error opening FIFO1");
-            exit(1);
+            write(fd_log, "Child1: Error opening FIFO1\n", 27);
+            exit(EXIT_FAILURE);
         }
-        // set_nonblocking(fd1); // Set FIFO1 to non-blocking mode
+
+        // Wait for data with timeout
+        if (wait_for_data(fd1, TIMEOUT) <= 0) {
+            write(fd_log, "Child1: Timeout waiting for data\n", 33);
+            close(fd1);
+            exit(EXIT_FAILURE);
+        }
 
         if (read(fd1, &num1, sizeof(num1)) != sizeof(num1) || 
             read(fd1, &num2, sizeof(num2)) != sizeof(num2)) {
-            syslog(LOG_ERR, "Child1: Error reading numbers");
+            write(fd_log, "Child1: Error reading numbers\n", 29);
             close(fd1);
-            exit(1);
+            exit(EXIT_FAILURE);
         }
-        syslog(LOG_INFO, "Child1 read numbers: %d, %d", num1, num2);
+        char msg2[100];
+        snprintf(msg2, sizeof(msg2), "Child1 read numbers: %d, %d\n", num1, num2);
+        write(fd_log, msg2, strlen(msg2));
         close(fd1);
 
         result = (num1 > num2) ? num1 : num2;
         
-        fd2 = open(FIFO2, O_WRONLY);
-        if (fd2 == -1) {
-            syslog(LOG_ERR, "Child1: Error opening FIFO2");
-            exit(1);
+        fd3 = open(FIFO3, O_WRONLY);
+        if (fd3 == -1) {
+            write(fd_log, "Child1: Error opening FIFO3\n", 27);
+            exit(EXIT_FAILURE);
         }
-        // set_nonblocking(fd2); // Set FIFO2 to non-blocking mode
-        write(fd2, &result, sizeof(result));
-        syslog(LOG_INFO, "Child1 wrote result: %d", result);
-        close(fd2);
-        exit(0);
+        write(fd3, &result, sizeof(result));
+        char msg3[100];
+        snprintf(msg3, sizeof(msg3), "Child1 wrote result: %d\n", result);
+        write(fd_log, msg3, strlen(msg3));
+        close(fd3);
+        exit(EXIT_SUCCESS);
     } 
     else if (pid1 > 0) {
         pid_t pid2 = fork();
         if (pid2 == 0) {
             // Child 2 - Reads command from FIFO2, then result
-            syslog(LOG_INFO, "Child2 started with PID: %d", getpid());
+            char msg[100];
+            snprintf(msg, sizeof(msg), "Child2 started with PID: %d\n", getpid());
+            write(fd_log, msg, strlen(msg));
             sleep(10);
+
             
             fd2 = open(FIFO2, O_RDONLY);
             if (fd2 == -1) {
-                syslog(LOG_ERR, "Child2: Error opening FIFO2");
-                exit(1);
+                write(fd_log, "Child2: Error opening FIFO2\n", 27);
+                exit(EXIT_FAILURE);
             }
-            // set_nonblocking(fd2); // Set FIFO2 to non-blocking mode
+
+            // Wait for data with timeout
+            if (wait_for_data(fd2, TIMEOUT) <= 0) {
+                write(fd_log, "Child2: Timeout waiting for command\n", 35);
+                close(fd2);
+                exit(EXIT_FAILURE);
+            }
 
             // First read the command
             char cmd[10];
             if (read(fd2, cmd, sizeof(CMD)) != sizeof(CMD)) {
-                syslog(LOG_ERR, "Child2: Error reading command");
+                write(fd_log, "Child2: Error reading command\n", 29);
                 close(fd2);
-                exit(1);
+                exit(EXIT_FAILURE);
             }
-            syslog(LOG_INFO, "Child2 read command: %s", cmd);
+            char msg2[100];
+            snprintf(msg2, sizeof(msg2), "Child2 read command: %s\n", cmd);
+            write(fd_log, msg2, strlen(msg2));
+            close(fd2);
+
+            fd3 = open(FIFO3, O_RDONLY);
+            if (fd3 == -1) {
+                write(fd_log, "Child2: Error opening FIFO3\n", 27);
+                exit(EXIT_FAILURE);
+            }
 
             // Then read the result (written by child1)
-            if (read(fd2, &result, sizeof(result)) != sizeof(result)) {
-                syslog(LOG_ERR, "Child2: Error reading result");
-                close(fd2);
-                exit(1);
+            if (read(fd3, &result, sizeof(result)) != sizeof(result)) {
+                write(fd_log, "Child2: Error reading result\n", 29);
+                close(fd3);
+                exit(EXIT_FAILURE);
             }
-            syslog(LOG_INFO, "Child2 read result: %d", result);
-            close(fd2);
+            char msg3[100];
+            snprintf(msg3, sizeof(msg3), "Child2 read result: %d\n", result);
+            write(fd_log, msg3, strlen(msg3));
+            close(fd3);
             
             // This will go to syslog and log file
-            syslog(LOG_INFO, "The result is: %d", result);
-            printf("The result is: %d\n", result);
-            exit(0);
+            char msg4[100];
+            snprintf(msg4, sizeof(msg4), "Child2: The result is: %d\n", result);
+            write(fd_log, msg4, strlen(msg4));
+
+            exit(EXIT_SUCCESS);
         }
         else if (pid2 > 0) {
-            // Convert to daemon
-            syslog(LOG_INFO, "Parent process started with PID: %d", getpid());
+            char msg[100];
+            snprintf(msg, sizeof(msg), "Daemon started with PID: %d\n", getpid());
+            write(fd_log, msg, strlen(msg));
             
             sleep(1); // Let children start
             
             // Write numbers to FIFO1
             fd1 = open(FIFO1, O_WRONLY);
             if (fd1 == -1) {
-                syslog(LOG_ERR, "Parent: Error opening FIFO1");
+                write(fd_log, "Parent: Error opening FIFO1\n", 27);
                 kill(pid1, SIGTERM);
                 kill(pid2, SIGTERM);
-                goto cleanup;
+                clean_data();
+                return 1;
             }
-            // set_nonblocking(fd1); // Set FIFO1 to non-blocking mode
             write(fd1, &num1, sizeof(num1));
             write(fd1, &num2, sizeof(num2));
-            syslog(LOG_INFO, "Parent wrote numbers: %d, %d", num1, num2);
+            char msg2[100];
+            snprintf(msg2, sizeof(msg2), "Parent wrote numbers: %d, %d\n", num1, num2);
+            write(fd_log, msg2, strlen(msg2));
             close(fd1);
 
             alarm(TIMEOUT); // Set timeout for child processes
 
-            waitpid(pid1, NULL, 0); // Wait for child1 to finish
             
             // Write command to FIFO2
             fd2 = open(FIFO2, O_WRONLY);
             if (fd2 == -1) {
-                syslog(LOG_ERR, "Parent: Error opening FIFO2");
+                write(fd_log, "Parent: Error opening FIFO2\n", 27);
                 kill(pid1, SIGTERM);
                 kill(pid2, SIGTERM);
-                goto cleanup;
+                clean_data();
             }
-            // set_nonblocking(fd2); // Set FIFO2 to non-blocking mode
             write(fd2, CMD, strlen(CMD)+1);
-            syslog(LOG_INFO, "Parent wrote command: %s", CMD);
+            char msg3[100];
+            snprintf(msg3, sizeof(msg3), "Parent wrote command: %s\n", CMD);
+            write(fd_log, msg3, strlen(msg3));
             close(fd2);
-
+            
             alarm(0); // Reset timeout
             
             signal(SIGCHLD, sigchld_handler);
-
+            
             // Main loop
             while (running) {
-                syslog(LOG_INFO, "proceeding");
-                printf("proceeding\n");
+                write(fd_log, "proceeding\n", 11);
                 sleep(2);
-                
                 if (child_count >= total_children) {
                     running = 0;
                 }
             }
+            // Wait for children to finish
+            waitpid(pid1, NULL, 0);
+            waitpid(pid2, NULL, 0);
             
-            cleanup:
-            // Wait for any remaining children
-            while (wait(NULL) > 0);
-            
-            // Cleanup
-            unlink(FIFO1);
-            unlink(FIFO2);
-            syslog(LOG_INFO, "Daemon shutting down");
-            closelog();
+
+            clean_data();
             return 0;
         }
         else {
-            syslog(LOG_ERR, "Error forking child 2");
+            write(fd_log, "Error forking child 2\n", 22);
             kill(pid1, SIGTERM);
             wait(NULL);
-            goto cleanup;
+            clean_data();
+            return 1;
         }
     }
     else {
-        syslog(LOG_ERR, "Error forking child 1");
-        goto cleanup;
+        write(fd_log, "Error forking child 1\n", 22);
+        clean_data();
+        return 1;
     }
 }
