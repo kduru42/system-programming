@@ -17,37 +17,24 @@
 #define FIFO3 "/tmp/fifo3"
 #define CMD "COMPARE\n"
 #define LOG_FILE "daemon_log.log"
-#define CONFIG_FILE "/etc/daemon_config.conf"
 #define TIMEOUT 15
 
 
 volatile sig_atomic_t child_count = 0;
 volatile sig_atomic_t total_children = 2;
 volatile sig_atomic_t running = 1;
-volatile sig_atomic_t need_reload = 0;
 int fd_log;
 
-int wait_for_data(int fd, int timeout_sec) {
-    struct timeval tv;
-    fd_set readfds;
-    
-    FD_ZERO(&readfds);
-    FD_SET(fd, &readfds);
-    
-    tv.tv_sec = timeout_sec;
-    tv.tv_usec = 0;
-    
-    return select(fd+1, &readfds, NULL, NULL, &tv);
-}
-
-void timeout_handler(int sig) {
+/* Handler for the timeout signal */
+void timeout_handler() {
     write(fd_log, "Timeout occurred, terminating child processes\n", 44);
     // Terminate all child processes
     kill(0, SIGTERM); // Send SIGTERM to all processes in the same process group
     running = 0; // Stop the main loop
 }
 
-void sigchld_handler(int sig) {
+/* Handler for SIGCHLD signal */
+void sigchld_handler() {
     pid_t pid;
     int status;
     char msg[100];
@@ -65,11 +52,13 @@ void sigchld_handler(int sig) {
         child_count++;
     }
     
+    // Check if all child processes have terminated
     if (child_count >= total_children) {
         running = 0;
     }
 }
 
+/* Signal handler for SIGUSR1, SIGHUP, and SIGTERM signals */
 void signal_handler(int sig) {
     switch(sig) {
         case SIGUSR1:
@@ -85,8 +74,8 @@ void signal_handler(int sig) {
     }
 }
 
+/* Cleanup function to remove FIFOs and close log file */
 void clean_data() {
-    // Cleanup function to remove FIFOs and close log file
     unlink(FIFO1);
     unlink(FIFO2);
     unlink(FIFO3);
@@ -150,7 +139,6 @@ int main(int argc, char *argv[]) {
     int result = 0;
     int fd1, fd2, fd3;
 
-    // Create FIFOs
     if (mkfifo(FIFO1, 0666) == -1 && errno != EEXIST) {
         perror("Error creating FIFO1");
         return 1;
@@ -175,20 +163,15 @@ int main(int argc, char *argv[]) {
         char msg[100];
         snprintf(msg, sizeof(msg), "Child1 started with PID: %d\n", getpid());
         write(fd_log, msg, strlen(msg));
-        sleep(10);
         
         fd1 = open(FIFO1, O_RDONLY);
+        sleep(10);
         if (fd1 == -1) {
             write(fd_log, "Child1: Error opening FIFO1\n", 27);
             exit(EXIT_FAILURE);
         }
 
-        // Wait for data with timeout
-        if (wait_for_data(fd1, TIMEOUT) <= 0) {
-            write(fd_log, "Child1: Timeout waiting for data\n", 33);
-            close(fd1);
-            exit(EXIT_FAILURE);
-        }
+        alarm(TIMEOUT);
 
         if (read(fd1, &num1, sizeof(num1)) != sizeof(num1) || 
             read(fd1, &num2, sizeof(num2)) != sizeof(num2)) {
@@ -196,6 +179,7 @@ int main(int argc, char *argv[]) {
             close(fd1);
             exit(EXIT_FAILURE);
         }
+        alarm(0);
         char msg2[100];
         snprintf(msg2, sizeof(msg2), "Child1 read numbers: %d, %d\n", num1, num2);
         write(fd_log, msg2, strlen(msg2));
@@ -222,21 +206,15 @@ int main(int argc, char *argv[]) {
             char msg[100];
             snprintf(msg, sizeof(msg), "Child2 started with PID: %d\n", getpid());
             write(fd_log, msg, strlen(msg));
-            sleep(10);
-
+            
             
             fd2 = open(FIFO2, O_RDONLY);
+            sleep(10);
             if (fd2 == -1) {
                 write(fd_log, "Child2: Error opening FIFO2\n", 27);
                 exit(EXIT_FAILURE);
             }
-
-            // Wait for data with timeout
-            if (wait_for_data(fd2, TIMEOUT) <= 0) {
-                write(fd_log, "Child2: Timeout waiting for command\n", 35);
-                close(fd2);
-                exit(EXIT_FAILURE);
-            }
+            alarm(TIMEOUT);
 
             // First read the command
             char cmd[10];
@@ -245,8 +223,9 @@ int main(int argc, char *argv[]) {
                 close(fd2);
                 exit(EXIT_FAILURE);
             }
+            alarm(0);
             char msg2[100];
-            snprintf(msg2, sizeof(msg2), "Child2 read command: %s\n", cmd);
+            snprintf(msg2, sizeof(msg2), "Child2 read command: %s", cmd);
             write(fd_log, msg2, strlen(msg2));
             close(fd2);
 
@@ -255,6 +234,7 @@ int main(int argc, char *argv[]) {
                 write(fd_log, "Child2: Error opening FIFO3\n", 27);
                 exit(EXIT_FAILURE);
             }
+            alarm(TIMEOUT);
 
             // Then read the result (written by child1)
             if (read(fd3, &result, sizeof(result)) != sizeof(result)) {
@@ -262,12 +242,12 @@ int main(int argc, char *argv[]) {
                 close(fd3);
                 exit(EXIT_FAILURE);
             }
+            alarm(0);
             char msg3[100];
             snprintf(msg3, sizeof(msg3), "Child2 read result: %d\n", result);
             write(fd_log, msg3, strlen(msg3));
             close(fd3);
             
-            // This will go to syslog and log file
             char msg4[100];
             snprintf(msg4, sizeof(msg4), "Child2: The result is: %d\n", result);
             write(fd_log, msg4, strlen(msg4));
@@ -310,7 +290,7 @@ int main(int argc, char *argv[]) {
             }
             write(fd2, CMD, strlen(CMD)+1);
             char msg3[100];
-            snprintf(msg3, sizeof(msg3), "Parent wrote command: %s\n", CMD);
+            snprintf(msg3, sizeof(msg3), "Parent wrote command: %s", CMD);
             write(fd_log, msg3, strlen(msg3));
             close(fd2);
             
@@ -318,7 +298,6 @@ int main(int argc, char *argv[]) {
             
             signal(SIGCHLD, sigchld_handler);
             
-            // Main loop
             while (running) {
                 write(fd_log, "proceeding\n", 11);
                 sleep(2);
