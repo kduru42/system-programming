@@ -1,16 +1,16 @@
-NAME = fileManager
+NAME = hw3
 CC = gcc
-CFLAGS = -Wall -Wextra -Werror
+CFLAGS = -Wall -Wextra -Werror -lpthread
 RM = rm -f
 
-SRC = fileManager.c utils.c
+SRC = main.c
 
 OBJ = $(SRC:.c=.o)
 
 all: $(NAME)
 
 $(NAME): $(OBJ)
-	$(CC) $(CFLAGS) $(OBJ) -o $(NAME) 
+	$(CC) $(CFLAGS) $(OBJ) -o $(NAME)
 
 clean:
 	$(RM) $(OBJ)
